@@ -273,6 +273,7 @@ private:
 
 	bool _hold_offboard_xy = false;
 	bool _hold_offboard_z = false;
+	bool _triplet_updated = false;
 
 	math::Vector<3> _thrust_int;
 
@@ -1450,8 +1451,6 @@ void MulticopterPositionControl::control_auto(float dt)
 	math::Vector<3> curr_sp;
 	math::Vector<3> next_sp;
 
-	bool setpoint_updated = false;
-
 	if (_pos_sp_triplet.current.valid) {
 
 		/* project setpoint to local frame */
@@ -1466,8 +1465,7 @@ void MulticopterPositionControl::control_auto(float dt)
 			current_setpoint_valid = true;
 		}
 
-		setpoint_updated = ((curr_sp - _curr_sp_prev).length() > FLT_EPSILON) ? true : false;
-		_curr_sp_prev = curr_sp;
+		_triplet_updated = ((curr_sp - _curr_sp_prev).length() > FLT_EPSILON) ? true : false;
 	}
 
 	if (_pos_sp_triplet.previous.valid) {
@@ -1516,9 +1514,9 @@ void MulticopterPositionControl::control_auto(float dt)
 
 	if (adjust_max_velocity) {
 
-		if (setpoint_updated) {
+		if (_triplet_updated) {
 			_vel_target_entry = _vel.length();
-			setpoint_updated = false;
+			_curr_sp_prev = curr_sp;
 		}
 
 		/* vel target_entry needs to be larger than vel cruise xy min */
