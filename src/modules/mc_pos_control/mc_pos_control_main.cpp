@@ -284,6 +284,7 @@ private:
 	math::Vector<3> _vel_ff;
 	math::Vector<3> _vel_sp_prev;
 	math::Vector<3> _vel_err_d;		/**< derivative of current velocity */
+	math::Vector<3> _curr_sp_prev;  /**< the previous current setpoint of the triplets */
 
 	math::Matrix<3, 3> _R;			/**< rotation matrix from attitude quaternions */
 	float _yaw;				/**< yaw angle (euler) */
@@ -294,7 +295,8 @@ private:
 	float _vel_z_lp;
 	float _acc_z_lp;
 	float _takeoff_thrust_sp;
-	float _vel_max_xy_valid;
+	float _vel_max_xy;  /**< equal to vel_max except in auto mode when close to target */
+	float _vel_target_entry;  /**< entry velocity in auto mode when close to target */
 
 	// counters for reset events on position and velocity states
 	// they are used to identify a reset event
@@ -462,7 +464,8 @@ MulticopterPositionControl::MulticopterPositionControl() :
 	_vel_z_lp(0),
 	_acc_z_lp(0),
 	_takeoff_thrust_sp(0.0f),
-	_vel_max_xy_valid(0.0f),
+	_vel_max_xy(0.0f),
+	_vel_target_entry(0.0f),
 	_z_reset_counter(0),
 	_xy_reset_counter(0),
 	_vz_reset_counter(0),
@@ -490,6 +493,7 @@ MulticopterPositionControl::MulticopterPositionControl() :
 	_vel_ff.zero();
 	_vel_sp_prev.zero();
 	_vel_err_d.zero();
+	_curr_sp_prev.zero();
 
 	_R.identity();
 
@@ -1446,6 +1450,8 @@ void MulticopterPositionControl::control_auto(float dt)
 	math::Vector<3> curr_sp;
 	math::Vector<3> next_sp;
 
+	bool setpoint_updated = false;
+
 	if (_pos_sp_triplet.current.valid) {
 
 		/* project setpoint to local frame */
@@ -1459,6 +1465,9 @@ void MulticopterPositionControl::control_auto(float dt)
 		    PX4_ISFINITE(curr_sp(2))) {
 			current_setpoint_valid = true;
 		}
+
+		setpoint_updated = ((curr_sp - _curr_sp_prev).length() > FLT_EPSILON) ? true : false;
+		_curr_sp_prev = curr_sp;
 	}
 
 	if (_pos_sp_triplet.previous.valid) {
@@ -1507,13 +1516,17 @@ void MulticopterPositionControl::control_auto(float dt)
 
 	if (adjust_max_velocity) {
 
-		/* only consider velocity max limit within 3m radius */
-		if ((_pos - curr_sp).length() > 3.0f) {
-			float slope = (cruising_speed(0) - _params.vel_cruise_xy_min) / (_params.target_threshold_xy - 3.0f);
-			_vel_max_xy_valid  = slope * ((curr_sp - _pos).length() - 3.0f) + _params.vel_cruise_xy_min;
-			cruising_speed(0) = _vel_max_xy_valid;
-			cruising_speed(1) = _vel_max_xy_valid;
+		if (setpoint_updated) {
+			_vel_target_entry = _vel.length();
+			setpoint_updated = false;
 		}
+
+		/* vel target_entry needs to be larger than vel cruise xy min */
+		_vel_target_entry = math::max(_vel_target_entry, _params.vel_cruise_xy_min);
+		float slope = (_vel_target_entry - _params.vel_cruise_xy_min) / (_params.target_threshold_xy);
+		_vel_max_xy  = slope * (curr_sp - _pos).length() + _params.vel_cruise_xy_min;
+		cruising_speed(0) = _vel_max_xy;
+		cruising_speed(1) = _vel_max_xy;
 	}
 
 
@@ -1604,7 +1617,7 @@ void MulticopterPositionControl::control_auto(float dt)
 			_pos_sp = curr_sp;
 
 			/* set max velocity to cruise */
-			_vel_max_xy_valid = cruising_speed(0);
+			_vel_max_xy = cruising_speed(0);
 		}
 
 		/* update yaw setpoint if needed */
@@ -1754,10 +1767,10 @@ MulticopterPositionControl::control_position(float dt)
 				  _vel_sp(1) * _vel_sp(1));
 
 
-	if (vel_norm_xy > _vel_max_xy_valid) {
+	if (vel_norm_xy > _vel_max_xy) {
 		/* note assumes vel_max(0) == vel_max(1) */
-		_vel_sp(0) = _vel_sp(0) * _vel_max_xy_valid / vel_norm_xy;
-		_vel_sp(1) = _vel_sp(1) * _vel_max_xy_valid / vel_norm_xy;
+		_vel_sp(0) = _vel_sp(0) * _vel_max_xy / vel_norm_xy;
+		_vel_sp(1) = _vel_sp(1) * _vel_max_xy / vel_norm_xy;
 	}
 
 	/* make sure velocity setpoint is saturated in z*/
@@ -2358,7 +2371,7 @@ MulticopterPositionControl::task_main()
 		setDt(dt);
 
 		/* set default max velocity in xy to vel_max */
-		_vel_max_xy_valid = _params.vel_max(0);
+		_vel_max_xy = _params.vel_max(0);
 
 		if (_control_mode.flag_armed && !was_armed) {
 			/* reset setpoints and integrals on arming */
